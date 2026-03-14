@@ -3,3 +3,4 @@
 *.ak
 *.en
 *.zip
+.ipynb_checkpoints/
