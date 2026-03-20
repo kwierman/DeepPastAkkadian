@@ -54,16 +54,19 @@ git clone https://github.com/your-repo/DeepPastAkkadian.git
 cd DeepPastAkkadian
 
 # Install dependencies
-pip install pandas numpy torch transformers scikit-learn sacrebleu matplotlib seaborn
+pip install pandas numpy torch transformers scikit-learn sacrebleu matplotlib seaborn datasets
 
-# Run full pipeline
-python 01_eda.py              # Analyze data
-python 02_data_preprocessing.py # Prepare datasets
-python 03_model_training.py    # Train T5 model
-python 05_evaluation.py       # Evaluate model
+# Run full pipeline (Jupyter notebooks)
+jupyter notebook notebooks/
 
-# Generate submission
-python 08_load_model_submission.py --output submission.csv
+# Or run notebooks programmatically
+jupyter nbconvert --to notebook --execute notebooks/01_data_acquisition.ipynb
+jupyter nbconvert --to notebook --execute notebooks/02_exploratory_data_analysis.ipynb
+jupyter nbconvert --to notebook --execute notebooks/03_data_preparation.ipynb
+jupyter nbconvert --to notebook --execute notebooks/04_model_training.ipynb
+jupyter nbconvert --to notebook --execute notebooks/05_model_submission.ipynb
+
+# Output: submission.csv
 ```
 
 ## Example Outputs
@@ -131,14 +134,12 @@ Reference:          "As soon as you have heard our letter, who(ever) over there.
 
 ```
 .
-├── 01_eda.py                      # Exploratory Data Analysis
-├── 02_data_preprocessing.py       # Data preprocessing & augmentation
-├── 03_model_training.py           # T5 model training
-├── 04_baseline_predictions.py     # TF-IDF retrieval baseline
-├── 05_evaluation.py               # Model evaluation
-├── 06_ensemble_training.py        # Ensemble model training
-├── 07_ensemble_predictions.py     # Ensemble predictions
-├── 08_load_model_submission.py    # Load model and create submission
+├── notebooks/                     # Jupyter notebooks for the full pipeline
+│   ├── 01_data_acquisition.ipynb       # Download & collect external data
+│   ├── 02_exploratory_data_analysis.ipynb  # EDA visualizations
+│   ├── 03_data_preparation.ipynb       # Preprocess & augment training data
+│   ├── 04_model_training.ipynb         # Train T5/MarianMT ensemble models
+│   └── 05_model_submission.ipynb       # Generate submission with beam voting
 │
 ├── output/
 │   ├── images/                    # EDA visualizations
@@ -151,20 +152,33 @@ Reference:          "As soon as you have heard our letter, who(ever) over there.
 │   ├── models/                    # Trained models
 │   │   ├── t5_akkadian_translator/
 │   │   └── ensemble/
-│   └── pre_processed_data/        # Cleaned datasets
+│   ├── pre_processed_data/        # Cleaned datasets
+│   └── external_data/             # Downloaded Akkademia corpus
 │
-├── train_augmented.csv            # Augmented training data (~28K samples)
-├── akkademia_train.ak/en          # External Akkademia parallel corpus
-├── test.csv                       # Test data
-├── submission_augmented.csv       # Single model predictions
-├── submission_ensemble.csv        # Ensemble predictions
-├── submission_final.csv           # Final submission (loaded model)
-└── all_predictions.csv            # All model predictions for analysis
+├── data/                         # Input data
+│   ├── train.csv                 # Training data (~1,500 samples)
+│   ├── test.csv                  # Test data
+│   ├── publications.csv          # OCR from scholarly PDFs
+│   ├── published_texts.csv       # Additional transliterations
+│   ├── OA_Lexicon_eBL.csv        # Old Assyrian lexicon
+│   └── eBL_Dictionary.csv        # Akkadian dictionary
+│
+└── submission.csv                 # Final submission file
 ```
 
 ## Detailed Pipeline
 
-### 1. Exploratory Data Analysis (`01_eda.py`)
+### 1. Data Acquisition (`01_data_acquisition.ipynb`)
+
+Downloads and collects external resources:
+- **Akkademia Corpus**: Downloads Old Assyrian/Babylonian parallel data from GitHub
+- **Publications Analysis**: Analyzes OCR output from ~950 scholarly PDFs
+- **Lexicon Loading**: Processes OA Lexicon (39K entries) and eBL Dictionary (19K entries)
+- **ORACC Exploration**: Attempts to fetch data from ORACC APIs
+
+**Output**: `output/external_data/` containing Akkademia parallel corpus (~40K sentence pairs)
+
+### 2. Exploratory Data Analysis (`02_exploratory_data_analysis.ipynb`)
 
 Generates visualizations analyzing the dataset characteristics:
 
@@ -177,13 +191,13 @@ Generates visualizations analyzing the dataset characteristics:
 | `lexicon_analysis.png` | Word type distribution and form lengths |
 | `train_test_comparison.png` | Overlay histograms comparing data splits |
 
-### 2. Data Preprocessing (`02_data_preprocessing.py`)
+### 3. Data Preparation (`03_data_preparation.ipynb`)
 
-Automatic preprocessing pipeline:
-- Downloads Akkademia corpus from ORACC RINAP projects
+Preprocessing pipeline:
+- Loads and combines original training data with external Akkademia data
 - Removes modern scribal notations (!, ?, /, :, .)
 - Normalizes gap markers `[...]` to `<gap>` tokens
-- Handles determinatives and special characters
+- Normalizes special characters (Ḫ→H, Š→SZ, etc.)
 - Splits data: 90% train, 10% validation
 
 **Data Statistics:**
@@ -196,42 +210,44 @@ Automatic preprocessing pipeline:
 | Validation | 4,199 |
 | Test | 4 |
 
-### 3. Model Training (`03_model_training.py`)
+**Output**: `output/pre_processed_data/` containing cleaned datasets
 
-Fine-tunes T5-small for translation:
+### 4. Model Training (`04_model_training.ipynb`)
+
+Trains an ensemble of translation models with memory-efficient sequential loading:
+- **T5-small**: 60M parameter sequence-to-sequence model
+- **T5-base**: Larger 220M parameter variant
+- **MarianMT**: Pre-trained neural machine translation model
+- **ByT5**: Character-level T5 for handling special characters
+
+Training configuration:
 - Input: `translate Akkadian to English: <transliteration>`
 - Output: `<translation>`
 - Optimizer: AdamW with linear warmup
 - Batch size: 16
-- Learning rate: 3e-4
+- Learning rate: 1e-3
 - Epochs: 2
 - Generation: Beam search (beam_size=5)
 
-### 4. Baseline Predictions (`04_baseline_predictions.py`)
+**Output**: `output/models/` containing trained model checkpoints
 
-TF-IDF retrieval baseline for comparison:
-- Vectorizes training transliterations
-- Retrieves most similar training example for each test input
-- Provides similarity score for ensemble weighting
+### 5. Model Submission (`05_model_submission.ipynb`)
 
-### 5. Evaluation (`05_evaluation.py`)
+Generates final predictions using ensemble beam voting:
+- Loads models sequentially to avoid GPU OOM
+- Generates beam_size translations per model
+- Aggregates candidates across all models
+- Selects best translation using length-normalized scoring
+- Outputs to `submission.csv`
 
-Computes translation quality metrics:
-- **BLEU**: n-gram precision with brevity penalty
-- **chrF++**: Character-level n-gram F-score (β=2)
-- Geometric mean of both metrics
+**Ensemble Models:**
+1. T5-small v1
+2. T5-base
+3. MarianMT
+4. ByT5
+5. T5-small v2
 
-### 6. Ensemble Methods
-
-**Ensemble Training** (`06_ensemble_training.py`):
-- Trains multiple T5 variants
-- Optionally includes mT5-small for multilingual benefits
-
-**Ensemble Predictions** (`07_ensemble_predictions.py`):
-- Combines neural and retrieval predictions
-- Confidence threshold: 0.6 (retrieval used above this threshold)
-
-### 7. Submission Generation (`08_load_model_submission.py`)
+**Voting Strategy**: Length-normalized beam scoring
 
 ```bash
 # Basic usage
@@ -246,10 +262,10 @@ python 08_load_model_submission.py --output my_submission.csv
 
 ## GPU Support
 
-Scripts automatically detect CUDA availability:
-- **GPU available**: Uses CUDA with FP16 mixed precision
+Notebooks automatically detect CUDA availability:
+- **GPU available**: Uses CUDA with mixed precision
 - **CPU only**: Falls back to full precision (slower)
-- Memory-efficient batch processing for large datasets
+- Memory-efficient sequential model loading to avoid OOM errors
 
 To verify GPU availability:
 ```python
@@ -373,10 +389,13 @@ pip install pandas>=1.5.0
 pip install numpy>=1.23.0
 pip install torch>=2.0.0
 pip install transformers>=4.30.0
+pip install datasets>=2.14.0
 pip install scikit-learn>=1.2.0
 pip install sacrebleu>=2.3.0
 pip install matplotlib>=3.7.0
 pip install seaborn>=0.12.0
+pip install jupyter>=1.0.0
+pip install nbconvert>=7.0.0
 ```
 
 ## Acknowledgments
